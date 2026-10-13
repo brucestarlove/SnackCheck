@@ -1,6 +1,6 @@
 # Snack Check
 
-Two buttons: one eats, one drinks. They always grab the best food and water in your bags, so you're not digging through them after every pull. It also tells you when you're running low, before you end up sitting there with nothing left.
+Two buttons: one eats, one drinks. They always grab the best food and water in your bags, so you're not digging through them after every pull. It also tells you when you're running low, before you end up sitting there with nothing left. You can also turn on a third button for first aid bandages.
 
 Made for WoW Forever.
 
@@ -18,6 +18,10 @@ Rather have it on your action bars? It can make `SC Eat`, `SC Drink` and `SC Eat
 
 No mana, no drink button.
 
+Bandages are off by default. Tick **Enable bandages** in the settings to show a button that uses WoW's normal item targeting and self-cast settings. It recognizes every item in the client's Bandage consumable category, including battleground and server-added variants. It picks the highest item level bandage you can use, checking your First Aid requirements, then uses the same leftover and pinning rules as food and drink. Unusable bandages stay in the hover list with a grey icon. Learning or improving First Aid updates the choice.
+
+Bandages have their own low-stock warning, key binding and optional `SC Bandage` macro. Eat & Drink keeps using just food and water. Turning bandages off hides the button, stops bandage warnings, clears its secure actions and deletes `SC Bandage` if it was made. Your pin and key binding are kept for next time.
+
 ## Installing
 
 1. Grab the latest zip from [Releases](../../releases).
@@ -27,7 +31,7 @@ No mana, no drink button.
 
 ## Using it
 
-Click to eat or drink. Shift-drag to move the buttons around. Hover to open the list.
+Click to eat, drink or use a bandage. Shift-drag to move the buttons around. Hover to open the list.
 
 ## Settings
 
@@ -35,7 +39,7 @@ Click to eat or drink. Shift-drag to move the buttons around. Hover to open the 
 
 | Warnings | |
 |---|---|
-| Food / Drink | Warn me below this many. 0 turns the low warning off, running out always warns. |
+| Food / Drink / Bandages | Warn me below this many. 0 turns the low warning off, running out always warns. Bandage warnings only run when bandages are enabled. |
 | Show in chat / Show on screen | Where the warnings go. |
 | Remind at login | The one reminder when you log in low. It only goes to chat, unless you've turned chat warnings off. |
 
@@ -43,15 +47,16 @@ Click to eat or drink. Shift-drag to move the buttons around. Hover to open the 
 |---|---|
 | Match action bar | Copies the size and spacing of your main bar. On by default. |
 | Button size / Spacing | Your own size, once you untick Match action bar. |
-| Stack vertically | Drink under eat instead of next to it. |
+| Stack vertically | Stack the enabled buttons under each other instead of next to each other. |
 | Count size | The number in the corner. |
 | Show buttons | Hide them. Handy if you only use the macros. |
+| Enable bandages | Add first aid bandages. Off by default. |
 
 The arrows next to the number boxes do 1 per click, 5 with shift, or just hold them down.
 
 Setting a key binding is click, press a key, done. Right-click clears it. They also show up in the normal keybindings menu under AddOns.
 
-For the macros, tick Make macros, then hit Eat, Drink or Both to put one on your cursor and drop it on a bar. Unticking deletes them again. They take up three of your character macro slots.
+For the macros, tick Make macros, then hit Eat, Drink, Both or Bandage to put one on your cursor and drop it on a bar. Bandage is available when bandages are enabled. Unticking deletes them again. They take up three of your character macro slots, plus one for bandages when enabled. Characters without mana skip the Drink macro.
 
 Lost your buttons somewhere? `/snack reset` puts them back in the middle of the screen.
 

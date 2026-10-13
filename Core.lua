@@ -7,19 +7,24 @@
 local BIND_BOTH = "CLICK SnackCheckButton:LeftButton"
 local BIND_EAT = "CLICK SnackCheckEatKey:LeftButton"
 local BIND_DRINK = "CLICK SnackCheckDrinkKey:LeftButton"
+local BIND_BANDAGE = "CLICK SnackCheckBandageKey:LeftButton"
 
 BINDING_HEADER_SNACKCHECK = "Snack Check"
 _G["BINDING_NAME_" .. BIND_BOTH] = "Eat & drink"
 _G["BINDING_NAME_" .. BIND_EAT] = "Eat"
 _G["BINDING_NAME_" .. BIND_DRINK] = "Drink"
+_G["BINDING_NAME_" .. BIND_BANDAGE] = "Bandage"
 
 -- State ---------------------------------------------------------------------
 
 local FOOD_AND_DRINK_SUBCLASS = 5
+local BANDAGE_SUBCLASS = 7
+local BUTTON_ORDER = { "food", "drink", "bandage" }
 -- shown when there's nothing to use (macros want the bare icon name)
 local PLACEHOLDER = {
 	food = "INV_Misc_Fork&Knife",
 	drink = "INV_Drink_07",
+	bandage = "INV_Misc_Bandage_12",
 }
 -- the ? icon makes a macro follow #showtooltip
 local DYNAMIC_MACRO_ICON = 134400
@@ -40,7 +45,7 @@ local KIND = {
 local WELL_FED = (C_Spell.GetSpellName(19705) or "Well Fed"):lower()
 local CONJURED = ITEM_CONJURED or "Conjured Item"
 
-local items = { food = {}, drink = {} }
+local items = { food = {}, drink = {}, bandage = {} }
 local chosen = {}
 -- what the warnings track: same as chosen, minus conjured stuff you can't buy
 local restock = {}
@@ -64,6 +69,7 @@ local combined = createKeyButton("SnackCheckButton")
 local keyButtons = {
 	food = createKeyButton("SnackCheckEatKey"),
 	drink = createKeyButton("SnackCheckDrinkKey"),
+	bandage = createKeyButton("SnackCheckBandageKey"),
 }
 
 local flyout = CreateFrame("Frame", nil, UIParent)
@@ -107,9 +113,17 @@ local function byBest(a, b)
 	return a.id < b.id
 end
 
+-- bandages often require First Aid rather than a character level. their item
+-- level orders the ranks, including bandages added by the server
+local function byBestBandage(a, b)
+	if a.itemLevel ~= b.itemLevel then return a.itemLevel > b.itemLevel end
+	return byBest(a, b)
+end
+
 local function scan()
 	wipe(items.food)
 	wipe(items.drink)
+	wipe(items.bandage)
 	local seen = {}
 	local incomplete = false
 	for bag = BACKPACK_CONTAINER, NUM_BAG_SLOTS do
@@ -118,20 +132,22 @@ local function scan()
 			if info and not seen[info.itemID] then
 				local id = info.itemID
 				local _, _, _, _, _, classID, subClassID = C_Item.GetItemInfoInstant(id)
-				if classID == Enum.ItemClass.Consumable and subClassID == FOOD_AND_DRINK_SUBCLASS then
-					local spellName = C_Item.GetItemSpell(id)
-					local minLevel = select(5, C_Item.GetItemInfo(id))
-					local kind = KIND[spellName]
-					if not spellName or not minLevel then
+				local isBandage = SnackCheckDB.bandages and subClassID == BANDAGE_SUBCLASS
+				if classID == Enum.ItemClass.Consumable and (subClassID == FOOD_AND_DRINK_SUBCLASS or isBandage) then
+					local spellName = not isBandage and C_Item.GetItemSpell(id)
+					local name, _, _, itemLevel, minLevel = C_Item.GetItemInfo(id)
+					local kind = isBandage and "bandage" or KIND[spellName]
+					if not minLevel or (isBandage and not itemLevel) or (not isBandage and not spellName) then
 						incomplete = true
 					elseif kind then
 						seen[id] = true
-						local flags = readTooltip(bag, slot, id)
+						local flags = not isBandage and readTooltip(bag, slot, id) or {}
 						table.insert(items[kind], {
 							id = id,
-							name = info.itemName,
+							name = name,
 							icon = info.iconFileID,
 							minLevel = minLevel,
+							itemLevel = itemLevel,
 							count = C_Item.GetItemCount(id),
 							buff = flags.buff,
 							conjured = flags.conjured,
@@ -143,7 +159,12 @@ local function scan()
 	end
 	table.sort(items.food, byBest)
 	table.sort(items.drink, byBest)
+	table.sort(items.bandage, byBestBandage)
 	return incomplete
+end
+
+local function canUse(kind, entry, level)
+	return entry.minLevel <= level and (kind ~= "bandage" or C_Item.IsUsableItem(entry.id))
 end
 
 -- order: pinned buff food, conjured, pinned, best non-buff.
@@ -155,7 +176,7 @@ local function choose(kind, level, conjuredFilter)
 		local allowed = conjuredFilter == nil
 			or (conjuredFilter == "skip" and not entry.conjured)
 			or (conjuredFilter == "only" and entry.conjured)
-		if entry.minLevel <= level and allowed then
+		if canUse(kind, entry, level) and allowed then
 			if entry.id == pinnedID then
 				pinned = entry
 			elseif entry.conjured and not entry.buff then
@@ -191,7 +212,7 @@ local CONJURE_RANKS = {
 }
 local function conjures(kind)
 	local _, class = UnitClass("player")
-	if class ~= "MAGE" then return false end
+	if class ~= "MAGE" or not CONJURE_RANKS[kind] then return false end
 	for _, spellID in ipairs(CONJURE_RANKS[kind]) do
 		if IsPlayerSpell(spellID) then return true end
 	end
@@ -210,7 +231,7 @@ local function checkStock(kind, report)
 	lastStock[kind] = { id = id, count = count }
 
 	local conjure = conjures(kind)
-	local label = conjure and "conjured " .. kind or kind
+	local label = conjure and "conjured " .. kind or (kind == "bandage" and "bandages" or kind)
 	local threshold = SnackCheckDB.thresholds[kind]
 	if not entry then
 		if not last or last.id then
@@ -231,13 +252,16 @@ local function checkStock(kind, report)
 	end
 end
 
--- food and drink from the same check share one message
+-- supplies from the same check share one message
 local function checkAllStock(hasMana)
 	local atLogin = next(lastStock) == nil
 	local report = { out = {}, lowKinds = {}, lowItems = {} }
 	checkStock("food", report)
 	if hasMana then
 		checkStock("drink", report)
+	end
+	if SnackCheckDB.bandages then
+		checkStock("bandage", report)
 	end
 	if atLogin and not SnackCheckDB.alerts.login then return end
 
@@ -264,7 +288,14 @@ local MACROS = {
 	{ name = "SC Eat", kinds = { "food" }, placeholder = PLACEHOLDER.food },
 	{ name = "SC Drink", kinds = { "drink" }, placeholder = PLACEHOLDER.drink, needsMana = true },
 	{ name = "SC Eat+Drink", kinds = { "food", "drink" }, placeholder = PLACEHOLDER.food },
+	{ name = "SC Bandage", kinds = { "bandage" }, placeholder = PLACEHOLDER.bandage, needsBandages = true },
 }
+
+local function useLine(kind)
+	local entry = chosen[kind]
+	if not entry then return "" end
+	return "/use item:" .. entry.id
+end
 
 -- macros aren't always loaded at PLAYER_LOGIN, an early lookup finds nothing
 -- and we'd make a duplicate
@@ -279,13 +310,14 @@ local function syncMacros(hasMana)
 	if not macrosReady then return end
 	for _, macro in ipairs(MACROS) do
 		local index = GetMacroIndexByName(macro.name)
-		if not SnackCheckDB.macros or (macro.needsMana and not hasMana) then
+		if not SnackCheckDB.macros or (macro.needsMana and not hasMana)
+			or (macro.needsBandages and not SnackCheckDB.bandages) then
 			if index > 0 then DeleteMacro(index) end
 		else
 			local lines = { "#showtooltip" }
 			for _, kind in ipairs(macro.kinds) do
 				if chosen[kind] then
-					lines[#lines + 1] = "/use item:" .. chosen[kind].id
+					lines[#lines + 1] = useLine(kind)
 				end
 			end
 			local icon = #lines > 1 and DYNAMIC_MACRO_ICON or macro.placeholder
@@ -307,7 +339,7 @@ end
 
 -- Update --------------------------------------------------------------------
 
-local showFlyout
+local showFlyout, layout
 
 local function update(level)
 	if InCombatLockdown() then
@@ -321,23 +353,28 @@ local function update(level)
 	local hasMana = UnitPowerMax("player", Enum.PowerType.Mana) > 0
 	chosen.food = choose("food", level)
 	chosen.drink = hasMana and choose("drink", level) or nil
+	chosen.bandage = SnackCheckDB.bandages and choose("bandage", level) or nil
 	restock.food = choose("food", level, conjures("food") and "only" or "skip")
 	restock.drink = hasMana and choose("drink", level, conjures("drink") and "only" or "skip") or nil
+	restock.bandage = chosen.bandage
+	if not SnackCheckDB.bandages then lastStock.bandage = nil end
 	buttons.drink:SetShown(hasMana)
+	buttons.bandage:SetShown(SnackCheckDB.bandages)
+	layout()
 
-	local both = {}
 	for kind, button in pairs(buttons) do
 		local entry = chosen[kind]
-		local use = entry and "/use item:" .. entry.id or ""
+		local use = useLine(kind)
 		-- shift is for dragging, don't eat on shift-click
 		button:SetAttribute("macrotext", entry and "/stopmacro [mod:shift]\n" .. use or "")
 		keyButtons[kind]:SetAttribute("macrotext", use)
-		if entry then
-			both[#both + 1] = use
-		end
 		button.icon:SetTexture(entry and entry.icon or "Interface\\Icons\\" .. PLACEHOLDER[kind])
 		button.icon:SetDesaturated(not entry)
 		button.count:SetText(entry and entry.count or "")
+	end
+	local both = {}
+	for _, kind in ipairs({ "food", "drink" }) do
+		if chosen[kind] then both[#both + 1] = useLine(kind) end
 	end
 	combined:SetAttribute("macrotext", table.concat(both, "\n"))
 	anchor:SetShown(SnackCheckDB.showButtons)
@@ -350,7 +387,11 @@ local function update(level)
 	end
 
 	if flyout:IsShown() then
-		showFlyout(flyout.owner)
+		if flyout.owner:IsVisible() then
+			showFlyout(flyout.owner)
+		else
+			flyout:Hide()
+		end
 	end
 
 	if incomplete then
@@ -420,7 +461,7 @@ function showFlyout(owner)
 		button.count:SetFont(COUNT_FONT, countSize, COUNT_FLAGS)
 		button.entry = entry
 		button.icon:SetTexture(entry.icon)
-		button.icon:SetDesaturated(entry.minLevel > level)
+		button.icon:SetDesaturated(not canUse(owner.kind, entry, level))
 		button.count:SetText(entry.count)
 		button.pinned:SetShown(entry.id == pinned)
 		button:Show()
@@ -517,25 +558,33 @@ local function createButton(kind, name, label)
 	return button
 end
 
-local eat = createButton("food", "SnackCheckEatButton", "Eat")
-local drink = createButton("drink", "SnackCheckDrinkButton", "Drink")
+createButton("food", "SnackCheckEatButton", "Eat")
+createButton("drink", "SnackCheckDrinkButton", "Drink")
+createButton("bandage", "SnackCheckBandageButton", "Bandage"):Hide()
 
-local function layout()
-	eat:SetSize(buttonSize, buttonSize)
-	drink:SetSize(buttonSize, buttonSize)
-	eat:ClearAllPoints()
-	drink:ClearAllPoints()
-	if vertical then
-		anchor:SetSize(buttonSize, buttonSize * 2 + spacing)
-		eat:SetPoint("TOP")
-		drink:SetPoint("TOP", eat, "BOTTOM", 0, -spacing)
-	else
-		anchor:SetSize(buttonSize * 2 + spacing, buttonSize)
-		eat:SetPoint("LEFT")
-		drink:SetPoint("LEFT", eat, "RIGHT", spacing, 0)
+function layout()
+	local count = 0
+	for _, kind in ipairs(BUTTON_ORDER) do
+		local button = buttons[kind]
+		button:SetSize(buttonSize, buttonSize)
+		button:ClearAllPoints()
+		button.count:SetFont(COUNT_FONT, countSize, COUNT_FLAGS)
+		if button:IsShown() then
+			local offset = count * (buttonSize + spacing)
+			if vertical then
+				button:SetPoint("TOP", anchor, "TOP", 0, -offset)
+			else
+				button:SetPoint("LEFT", anchor, "LEFT", offset, 0)
+			end
+			count = count + 1
+		end
 	end
-	eat.count:SetFont(COUNT_FONT, countSize, COUNT_FLAGS)
-	drink.count:SetFont(COUNT_FONT, countSize, COUNT_FLAGS)
+	local length = buttonSize * count + spacing * (count - 1)
+	if vertical then
+		anchor:SetSize(buttonSize, length)
+	else
+		anchor:SetSize(length, buttonSize)
+	end
 end
 
 -- own size, or a copy of the main action bar scaled to us. a vertical bar
@@ -585,6 +634,12 @@ anchor:SetScript("OnEvent", function(_, event, arg1)
 		SnackCheckDB = SnackCheckDB or {}
 		SnackCheckCharDB = SnackCheckCharDB or {}
 		SnackCheckDB.thresholds = SnackCheckDB.thresholds or { food = 10, drink = 10 }
+		if SnackCheckDB.thresholds.bandage == nil then
+			SnackCheckDB.thresholds.bandage = 10
+		end
+		if SnackCheckDB.bandages == nil then
+			SnackCheckDB.bandages = false
+		end
 		SnackCheckDB.alerts = SnackCheckDB.alerts or { chat = true, screen = true }
 		if SnackCheckDB.alerts.login == nil then
 			SnackCheckDB.alerts.login = true
@@ -593,6 +648,8 @@ anchor:SetScript("OnEvent", function(_, event, arg1)
 			SnackCheckDB.showButtons = true
 		end
 		SnackCheckDB.layout = SnackCheckDB.layout or { matchBar = true, size = 45, spacing = 6 }
+		-- skill updates can arrive before login, when settings aren't ready yet
+		anchor:RegisterEvent("SKILL_LINES_CHANGED")
 		restorePosition()
 		update()
 	elseif event == "PLAYER_ENTERING_WORLD" then
@@ -635,8 +692,8 @@ title:SetText("Snack Check")
 local LEFT, RIGHT = 16, 330
 local CONTROL = 130
 -- leaves room for a hint that wraps onto two lines
-local ROWS_TOP = { -112, -142, -172, -202, -232, -262 }
-local ROWS_BOTTOM = { -358, -388, -418 }
+local ROWS_TOP = { -112, -142, -172, -202, -232, -262, -292 }
+local ROWS_BOTTOM = { -388, -418, -448, -478 }
 
 local function section(x, y, heading, hintText)
 	local header = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
@@ -762,13 +819,16 @@ createNumberBox(LEFT, ROWS_TOP[1], "Food", 0, 999,
 createNumberBox(LEFT, ROWS_TOP[2], "Drink", 0, 999,
 	function() return SnackCheckDB.thresholds.drink end,
 	function(n) SnackCheckDB.thresholds.drink = n end)
-createToggle(LEFT, ROWS_TOP[3], "Show in chat",
+local bandageBox = createNumberBox(LEFT, ROWS_TOP[3], "Bandages", 0, 999,
+	function() return SnackCheckDB.thresholds.bandage end,
+	function(n) SnackCheckDB.thresholds.bandage = n end)
+createToggle(LEFT, ROWS_TOP[4], "Show in chat",
 	function() return SnackCheckDB.alerts.chat end,
 	function(on) SnackCheckDB.alerts.chat = on end)
-createToggle(LEFT, ROWS_TOP[4], "Show on screen",
+createToggle(LEFT, ROWS_TOP[5], "Show on screen",
 	function() return SnackCheckDB.alerts.screen end,
 	function(on) SnackCheckDB.alerts.screen = on end)
-createToggle(LEFT, ROWS_TOP[5], "Remind at login",
+createToggle(LEFT, ROWS_TOP[6], "Remind at login",
 	function() return SnackCheckDB.alerts.login end,
 	function(on) SnackCheckDB.alerts.login = on end)
 
@@ -825,6 +885,14 @@ createToggle(RIGHT, ROWS_TOP[6], "Show buttons",
 	function(on)
 		SnackCheckDB.showButtons = on
 		update()
+	end)
+local refreshBandageControls
+createToggle(RIGHT, ROWS_TOP[7], "Enable bandages",
+	function() return SnackCheckDB.bandages end,
+	function(on)
+		SnackCheckDB.bandages = on
+		update()
+		refreshBandageControls()
 	end)
 
 local MODIFIER_KEYS = {
@@ -915,15 +983,16 @@ local function createBindButton(x, y, label, command)
 end
 
 -- Key bindings
-section(LEFT, -302, "Key bindings", "Click a button, then press a key. Right-click to clear.")
+section(LEFT, -332, "Key bindings", "Click a button, then press a key. Right-click to clear.")
 local bindButtons = {
 	createBindButton(LEFT, ROWS_BOTTOM[1], "Eat", BIND_EAT),
 	createBindButton(LEFT, ROWS_BOTTOM[2], "Drink", BIND_DRINK),
 	createBindButton(LEFT, ROWS_BOTTOM[3], "Eat & drink", BIND_BOTH),
+	createBindButton(LEFT, ROWS_BOTTOM[4], "Bandage", BIND_BANDAGE),
 }
 
 -- Action bar macros
-section(RIGHT, -302, "Action bar macros", "SC Eat, SC Drink and SC Eat+Drink. Unticking deletes them.")
+section(RIGHT, -332, "Action bar macros", "Eat, Drink, Both; Bandage when enabled. Unticking deletes them.")
 createToggle(RIGHT, ROWS_BOTTOM[1], "Make macros",
 	function() return SnackCheckDB.macros end,
 	function(on)
@@ -931,14 +1000,17 @@ createToggle(RIGHT, ROWS_BOTTOM[1], "Make macros",
 		update()
 	end)
 rowLabel(RIGHT, ROWS_BOTTOM[2], "Put on a bar")
+rowLabel(RIGHT, ROWS_BOTTOM[3], "Bandage macro")
 
 -- puts the macro on the cursor and closes options so you can reach the bars
-local PICKUP_LABELS = { "Eat", "Drink", "Both" }
+local PICKUP_LABELS = { "Eat", "Drink", "Both", "Bandage" }
+local pickupButtons = {}
 for i, macro in ipairs(MACROS) do
 	local button = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-	button:SetSize(56, 22)
+	button:SetSize(macro.needsBandages and 86 or 56, 22)
 	button:SetText(PICKUP_LABELS[i])
-	button:SetPoint("LEFT", panel, "TOPLEFT", RIGHT + CONTROL + (i - 1) * 60, ROWS_BOTTOM[2])
+	button:SetPoint("LEFT", panel, "TOPLEFT", RIGHT + CONTROL + (macro.needsBandages and 0 or (i - 1) * 60),
+		macro.needsBandages and ROWS_BOTTOM[3] or ROWS_BOTTOM[2])
 	button:SetScript("OnClick", function()
 		local index = GetMacroIndexByName(macro.name)
 		if index > 0 and not InCombatLockdown() then
@@ -948,6 +1020,13 @@ for i, macro in ipairs(MACROS) do
 			print("|cffffd200Snack Check|r: tick \"Make macros\" first.")
 		end
 	end)
+	pickupButtons[i] = button
+end
+
+function refreshBandageControls()
+	setBoxEnabled(bandageBox, SnackCheckDB.bandages)
+	bindButtons[4]:SetEnabled(SnackCheckDB.bandages)
+	pickupButtons[4]:SetEnabled(SnackCheckDB.bandages)
 end
 
 panel:SetScript("OnShow", function()
@@ -955,6 +1034,7 @@ panel:SetScript("OnShow", function()
 		box:SetText(box.get())
 	end
 	refreshLayoutBoxes()
+	refreshBandageControls()
 	for _, check in ipairs(toggles) do
 		check:SetChecked(check.get())
 	end
