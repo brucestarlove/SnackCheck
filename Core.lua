@@ -492,9 +492,10 @@ end)
 
 -- Buttons -------------------------------------------------------------------
 
+-- saved by the top-left corner, so a button appearing or disappearing doesn't
+-- shift the others around
 local function savePosition()
-	local point, _, relativePoint, x, y = anchor:GetPoint()
-	SnackCheckDB.position = { point, relativePoint, x, y }
+	SnackCheckDB.position = { "TOPLEFT", "BOTTOMLEFT", anchor:GetLeft(), anchor:GetTop() }
 end
 
 local function restorePosition()
@@ -563,6 +564,14 @@ createButton("drink", "SnackCheckDrinkButton", "Drink")
 createButton("bandage", "SnackCheckBandageButton", "Bandage"):Hide()
 
 function layout()
+	-- hold on to the top-left corner before resizing, so the group grows to the
+	-- right (or down) instead of out from the middle
+	local left, top = anchor:GetLeft(), anchor:GetTop()
+	if left then
+		anchor:ClearAllPoints()
+		anchor:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top)
+	end
+
 	local count = 0
 	for _, kind in ipairs(BUTTON_ORDER) do
 		local button = buttons[kind]
@@ -992,7 +1001,7 @@ local bindButtons = {
 }
 
 -- Action bar macros
-section(RIGHT, -332, "Action bar macros", "Eat, Drink, Both; Bandage when enabled. Unticking deletes them.")
+section(RIGHT, -332, "Action bar macros", "SC Eat, SC Drink, SC Eat+Drink, and SC Bandage when bandages are on. Unticking deletes them.")
 createToggle(RIGHT, ROWS_BOTTOM[1], "Make macros",
 	function() return SnackCheckDB.macros end,
 	function(on)
@@ -1000,17 +1009,20 @@ createToggle(RIGHT, ROWS_BOTTOM[1], "Make macros",
 		update()
 	end)
 rowLabel(RIGHT, ROWS_BOTTOM[2], "Put on a bar")
-rowLabel(RIGHT, ROWS_BOTTOM[3], "Bandage macro")
 
--- puts the macro on the cursor and closes options so you can reach the bars
+-- puts the macro on the cursor and closes options so you can reach the bars.
+-- four fixed-width buttons don't fit the row, so each one fits its label
 local PICKUP_LABELS = { "Eat", "Drink", "Both", "Bandage" }
 local pickupButtons = {}
 for i, macro in ipairs(MACROS) do
 	local button = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-	button:SetSize(macro.needsBandages and 86 or 56, 22)
 	button:SetText(PICKUP_LABELS[i])
-	button:SetPoint("LEFT", panel, "TOPLEFT", RIGHT + CONTROL + (macro.needsBandages and 0 or (i - 1) * 60),
-		macro.needsBandages and ROWS_BOTTOM[3] or ROWS_BOTTOM[2])
+	button:SetSize(button:GetTextWidth() + 14, 22)
+	if i == 1 then
+		button:SetPoint("LEFT", panel, "TOPLEFT", RIGHT + CONTROL, ROWS_BOTTOM[2])
+	else
+		button:SetPoint("LEFT", pickupButtons[i - 1], "RIGHT", 3, 0)
+	end
 	button:SetScript("OnClick", function()
 		local index = GetMacroIndexByName(macro.name)
 		if index > 0 and not InCombatLockdown() then
