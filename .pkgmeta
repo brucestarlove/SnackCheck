@@ -2,5 +2,7 @@ package-as: SnackCheck
 
 ignore:
   - README.md
+  - CURSEFORGE.md
   - .gitignore
   - .pkgmeta
+  - .github
